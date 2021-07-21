@@ -82,20 +82,23 @@ def add_group(peer, text):
                        (peer, text))
         con.commit()
 #вывод списка групп
+#вывод списка групп
 def normal(st_group):
-    groups = defaultdict()
+    groups = []
+    groups_dict = defaultdict()
     for elem in st_group:
         chat_id = elem[0]
         group = elem[1]
-        groups[group] = chat_id
-    return groups
+        groups.append((chat_id, group))
+        groups_dict[group]=chat_id
+    return groups, groups_dict
     
 def choose_group():
     with sqlite3.connect('chats_hse.db') as con:
         cursor = con.cursor()
         cursor.execute('SELECT * FROM chats')
-        groups = normal(cursor.fetchall())
-    return groups
+        groups, groups_dict= normal(cursor.fetchall())
+    return groups, groups_dict
 #изменение название группы
 def change_name(chat, peer_id):
     with sqlite3.connect('chats_hse.db') as con:
@@ -109,18 +112,32 @@ def delete(text):
         cursor.execute('DELETE FROM chats WHERE chat=(?)', (text,))
         con.commit()
 #клавиатура подтверждения
-keyboard_choice = VkKeyboard(one_time = True)
+keyboard_choice = VkKeyboard(one_time = False, inline = True)
 keyboard_choice.add_button('Да', VkKeyboardColor.POSITIVE)
 keyboard_choice.add_button('Отмена', VkKeyboardColor.SECONDARY)
 #клавиатура завершения работы
 keyboard_end = VkKeyboard(one_time = True)
 keyboard_end.add_button('Пока всё')
-keyboard_end.add_button('Продолжить работу')
+keyboard_end.add_button('Продолжить работу', VkKeyboardColor.PRIMARY)
 #клавиатура начала работы
 keyboard_start = VkKeyboard(one_time = False, inline = True)
-keyboard_start.add_button('Удалить беседу', VkKeyboardColor.NEGATIVE) #сделать функцию
+keyboard_start.add_button('Удалить беседу', VkKeyboardColor.NEGATIVE)
 keyboard_start.add_line()
 keyboard_start.add_button('Отправить сообщение', VkKeyboardColor.SECONDARY)
+keyboard_start.add_line()
+keyboard_start.add_button('Пока всё', VkKeyboardColor.POSITIVE)
+#клавиатура команд для отправки сообщений
+keyboard_choose_group_commands = VkKeyboard(one_time = False, inline = True)
+keyboard_choose_group_commands.add_button('Всё выбрано. Ввести сообщение', VkKeyboardColor.SECONDARY)
+keyboard_choose_group_commands.add_line()
+keyboard_choose_group_commands.add_button('Выбрать все', VkKeyboardColor.PRIMARY)
+keyboard_choose_group_commands.add_line()
+keyboard_choose_group_commands.add_button('Назад', VkKeyboardColor.NEGATIVE)
+#клавиатура команд для удаления бесед
+keyboard_choose_group_delete = VkKeyboard(one_time = False, inline = True)
+keyboard_choose_group_delete.add_button('Выбрать все', VkKeyboardColor.PRIMARY)
+keyboard_choose_group_delete.add_line()
+keyboard_choose_group_delete.add_button('Назад', VkKeyboardColor.NEGATIVE)
 while True:
     
     try:
@@ -139,31 +156,30 @@ while True:
 #кнопка "отправить сообщение"
                     elif text == 'отправить сообщение':
                         chosen_groups = []
-                        keyboard_choose_group = VkKeyboard(one_time = False)
-                        groups = choose_group()
-                        for elem in groups:
-                            keyboard_choose_group.add_button(elem)
-#                             keyboard_choose_group.add_line()
-                        keyboard_choose_group.add_button('Всё выбрано. Ввести сообщение')
-                        keyboard_choose_group.add_button('Назад')
-                        send_message_to_user(user_id, peer_id, 'Выберите группу', keyboard_choose_group)
+                        groups, groups_dict = choose_group()
+                        send_message_to_user(user_id, peer_id, 'Выберите группу:\n'+ '\n'.join([elem[1] for elem in groups]))
+                        send_message_to_user(user_id, peer_id, 'Команды', keyboard_choose_group_commands)
+                        
                         n = True
                         while n:
                             for event in longpoll.listen():
                                 if event.type == VkBotEventType.MESSAGE_NEW:
                                     text = event.object['text']
                                     peer_id = event.obj.peer_id
-                                    if text in list(groups.keys()):
-                                        chosen_groups.append(groups[text])
-                                        send_message_to_user(user_id, peer_id, 'Ещё одну?', keyboard_choose_group)                        
-
-                                    elif text == 'Всё выбрано. Ввести сообщение':
+                                    if text in list(groups_dict.keys()):
+                                        chosen_groups.append((groups_dict[text], text))
+                                        send_message_to_user(user_id, peer_id, 'Ещё одну?')
+                                        send_message_to_user(user_id, peer_id, 'Выберите группу: \n' + '\n'.join([elem[1] for elem in groups]))
+                                        send_message_to_user(user_id, peer_id, 'Команды', keyboard_choose_group_commands)
+                                        n = True
+                                    elif text == 'Выбрать все':
+                                        chosen_groups = groups
                                         send_message_to_user(user_id, peer_id, 'Введите сообщение')
                                         for event in longpoll.listen():
                                             if event.type == VkBotEventType.MESSAGE_NEW:
                                                 msg = event.object['text']
                                                 user_id = event.object['from_id']
-                                                send_message_to_user(user_id, peer_id, 'Вы отправляете сообщение: ' + f'{msg}', keyboard_choice)
+                                                send_message_to_user(user_id, peer_id, 'Вы отправляете сообщение: ' + f'{msg}' + ' следующим группам: '+ ', '.join([elem[1] for elem in chosen_groups]), keyboard_choice)
 
                                                 for event in longpoll.listen():
                                                     if event.type == VkBotEventType.MESSAGE_NEW:
@@ -173,24 +189,68 @@ while True:
                                                             if chosen_groups != []:
                                                                 send_message_to_user(user_id, peer_id, 'Рассылка началась')
 
-                                                                for elem in chosen_groups:
-                                                                    send_message_to_chat(elem - 2000000000, elem, msg)
-                                                                    time.sleep(0.1)
+                                                                for elem in tqdm(chosen_groups):
+                                                                    try:
+                                                                        send_message_to_chat(elem[0] - 2000000000, elem[0], msg)
+                                                                        time.sleep(0.1)
+
+                                                                    except:
+                                                                        send_message_to_user(user_id, peer_id, 'В беседу: '+ f'{elem[1]}' + ' нет доступа')
                                                                 send_message_to_user(user_id, peer_id, 'Рассылка завершена')
                                                                 send_message_to_user(user_id, peer_id, 'Что-то ещё?', keyboard_end)
                                                                 n = False
+
                                                                 break
                                                             else:
-                                                                send_message_to_user(user_id, peer_id, 'Вы не выбрали ни одной группы. Выберите группу', keyboard_choose_group) 
+                                                                send_message_to_user(user_id, peer_id, 'Вы не выбрали ни одной группы. Выберите группу', keyboard_choose_group_commands) 
                                                                 n = False
                                                         elif text == 'отмена':
                                                             send_message_to_user(user_id, peer_id, 'Что сделать?', keyboard_start)
                                                             n = False
                                                             break
                                                 break
+                                        
+                                    
+                                    elif text == 'Всё выбрано. Ввести сообщение':
+                                        if chosen_groups != []: 
+                                            send_message_to_user(user_id, peer_id, 'Введите сообщение')
+                                            for event in longpoll.listen():
+                                                if event.type == VkBotEventType.MESSAGE_NEW:
+                                                    msg = event.object['text']
+                                                    user_id = event.object['from_id']
+                                                    send_message_to_user(user_id, peer_id, 'Вы отправляете сообщение: ' + f'{msg}'  + ' следующим группам: '+ ', '.join([elem[1] for elem in chosen_groups]), keyboard_choice)
+
+                                                    for event in longpoll.listen():
+                                                        if event.type == VkBotEventType.MESSAGE_NEW:
+                                                            text = event.object['text'].lower()
+                                                            peer_id = event.obj.peer_id
+                                                            if text == 'да':
+                                                                send_message_to_user(user_id, peer_id, 'Рассылка началась')
+                                                                for elem in tqdm(chosen_groups):
+                                                                    try:
+                                                                        send_message_to_chat(elem[0] - 2000000000, elem[0], msg)
+                                                                        time.sleep(0.1)
+                                                                    except:
+                                                                        send_message_to_user(user_id, peer_id, 'В беседу: '+ f'{elem[1]}' + ' нет доступа')
+                                                                send_message_to_user(user_id, peer_id, 'Рассылка завершена')
+                                                                send_message_to_user(user_id, peer_id, 'Что-то ещё?', keyboard_end)
+                                                                n = False
+                                                            elif text == 'отмена':
+                                                                send_message_to_user(user_id, peer_id, 'Что сделать?', keyboard_start)
+                                                                n = False
+                                                                break
+                                                    break
+                                        else:
+                                            send_message_to_user(user_id, peer_id, 'Вы не выбрали ни одной группы. Выберите группу: \n'+'\n'.join([elem[1] for elem in groups]), keyboard_choose_group_commands) 
+                                            n = False
+                                                      
+
                                     elif text == 'Назад':
                                         send_message_to_user(user_id, peer_id, 'Что сделать?', keyboard_start)
                                         n = False
+                                    else:
+                                        send_message_to_user(user_id, peer_id, 'Такой группы нет. Выберите группу: \n'+'\n'.join([elem[1] for elem in groups]))
+                                        send_message_to_user(user_id, peer_id, 'Команды', keyboard_choose_group_commands)
                                     break
                                        
                     elif text == 'назад':
@@ -200,23 +260,17 @@ while True:
                     
 # кнопка 'удалить беседу'
                     elif text == 'удалить беседу':
-                        chosen_groups = []
-                        keyboard_choose_group = VkKeyboard(one_time = False)
-                        groups = choose_group()
-                        for elem in groups:
-                            keyboard_choose_group.add_button(elem)
-#                             keyboard_choose_group.add_line()
-                        keyboard_choose_group.add_button('Назад')
-                        send_message_to_user(user_id, peer_id, 'Выберите группу, беседу которой хотите удалить', keyboard_choose_group)
+                        groups, groups_dict = choose_group()
+                
+                        send_message_to_user(user_id, peer_id, 'Выберите группу, беседу которой хотите удалить: \n'+ '\n'.join([elem[1] for elem in groups]))
+                        send_message_to_user(user_id, peer_id, 'Команды', keyboard_choose_group_delete)
+
         #получаем название удаляемой группы
                         for event in longpoll.listen():
                             if event.type == VkBotEventType.MESSAGE_NEW:
                                 group = event.object['text']
                                 peer_id = event.obj.peer_id
-                                if group in list(groups.keys()):
-                                    keyboard_choice = VkKeyboard(one_time = True)
-                                    keyboard_choice.add_button('Да', VkKeyboardColor.POSITIVE)
-                                    keyboard_choice.add_button('Отмена', VkKeyboardColor.SECONDARY)
+                                if group in list([elem[1] for elem in groups]):
                                     send_message_to_user(user_id, peer_id, 'Вы уверены? Действие нельзя будет отменить', keyboard_choice)
                                     #получаем подтверждение удаления
                                     for event in longpoll.listen():
@@ -229,12 +283,15 @@ while True:
                                                 send_message_to_user(user_id, peer_id, 'Что-то ещё?', keyboard_end)
                                                 
                                             elif text == 'отмена':
-                                                send_message_to_user(user_id, peer_id, 'Выберите группу, беседу которой хотите удалить', keyboard_choose_group) 
+                                                send_message_to_user(user_id, peer_id, 'Выберите группу, беседу которой хотите удалить' + '\n'.join([elem[1] for elem in groups])) 
                                             break
                                         
                                     
-                                elif text == 'Назад':
+                                elif group == 'Назад':
                                     send_message_to_user(user_id, peer_id, 'Что сделать?', keyboard_start)
+                                else:
+                                    send_message_to_user(user_id, peer_id, 'Такой группы нет. Выберите группу: \n'+'\n'.join([elem[1] for elem in groups]))
+                                    send_message_to_user(user_id, peer_id, 'Команды', keyboard_choose_group_delete)
                      
                                 break
                     
@@ -273,8 +330,7 @@ while True:
                                 change_name(text, peer_id)
                                 send_message_to_chat(chat_id, peer_id, 'Название изменено')
                                 break
-                    else:
-                        send_message_to_chat(chat_id, peer_id, 'Доступные команды: "регистрация", "изменить название группы"')   
+
                         
 #             if event.type == VkBotEventType.MESSAGE_EVENT: #callback-кнопки   
 #                 print(event)
